@@ -127,7 +127,7 @@ async def async_setup_entry(
                     key="WATER_USAGE_DAILY_AVERAGE",
                     name="Water usage daily average",
                     state_class=SensorStateClass.MEASUREMENT,
-                    device_class=SensorDeviceClass.WATER,
+                    icon="mdi:water-circle",
                 ),
             ),
             (
@@ -157,13 +157,21 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(minutes=update_interval_minutes),
         )
         self._iqua_softener = iqua_softener
+        _LOGGER.info(
+            "IquaSoftenerCoordinator initialized with %d minute update interval",
+            update_interval_minutes,
+        )
 
     async def _async_update_data(self) -> IquaSoftenerData:
+        _LOGGER.debug("Fetching data from iQua API")
         try:
-            return await self.hass.async_add_executor_job(
+            data = await self.hass.async_add_executor_job(
                 lambda: self._iqua_softener.get_data()
             )
+            _LOGGER.debug("Successfully fetched data from iQua API")
+            return data
         except IquaSoftenerException as err:
+            _LOGGER.error("Get data failed: %s", err)
             raise UpdateFailed(f"Get data failed: {err}")
 
 

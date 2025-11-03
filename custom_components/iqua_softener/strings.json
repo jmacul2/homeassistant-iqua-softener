@@ -13,6 +13,17 @@
       }
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "update_interval": "Update Interval (minutes)"
+        },
+        "description": "Configure how often to poll the iQua servers for updated data.",
+        "title": "iQua Softener Options"
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "state": {
