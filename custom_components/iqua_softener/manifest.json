@@ -5,7 +5,7 @@
   "issue_tracker": "https://github.com/arturzx/homeassistant-iqua-softener/issues",
   "dependencies": [],
   "codeowners": ["@arturzx"],
-  "requirements": ["iqua_softener~=2.0.0"],
+  "requirements": ["git+https://github.com/jmacul2/iqua-softener.git"],
   "config_flow": true,
   "iot_class": "cloud_polling",
   "loggers": ["iqua"],
