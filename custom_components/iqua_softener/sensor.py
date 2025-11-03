@@ -29,16 +29,13 @@ from homeassistant.const import UnitOfVolume
 
 from .const import (
     DOMAIN,
-    CONF_USERNAME,
-    CONF_PASSWORD,
     CONF_DEVICE_SERIAL_NUMBER,
+    DEFAULT_UPDATE_INTERVAL,
     VOLUME_FLOW_RATE_LITERS_PER_MINUTE,
     VOLUME_FLOW_RATE_GALLONS_PER_MINUTE,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-UPDATE_INTERVAL = timedelta(minutes=5)
 
 
 async def async_setup_entry(
@@ -50,13 +47,11 @@ async def async_setup_entry(
     if config_entry.options:
         config.update(config_entry.options)
     device_serial_number = config[CONF_DEVICE_SERIAL_NUMBER]
-    coordinator = IquaSoftenerCoordinator(
-        hass,
-        IquaSoftener(
-            config[CONF_USERNAME], config[CONF_PASSWORD], device_serial_number
-        ),
-    )
+
+    # Use the shared coordinator from __init__.py
+    coordinator = config["coordinator"]
     await coordinator.async_config_entry_first_refresh()
+
     sensors = [
         clz(coordinator, device_serial_number, entity_description)
         for clz, entity_description in (
@@ -135,18 +130,31 @@ async def async_setup_entry(
                     device_class=SensorDeviceClass.WATER,
                 ),
             ),
+            (
+                IquaSoftenerWaterShutoffValveStateSensor,
+                SensorEntityDescription(
+                    key="WATER_SHUTOFF_VALVE_STATE",
+                    name="Water shutoff valve state",
+                    icon="mdi:valve",
+                ),
+            ),
         )
     ]
     async_add_entities(sensors)
 
 
 class IquaSoftenerCoordinator(DataUpdateCoordinator):
-    def __init__(self, hass: core.HomeAssistant, iqua_softener: IquaSoftener):
+    def __init__(
+        self,
+        hass: core.HomeAssistant,
+        iqua_softener: IquaSoftener,
+        update_interval_minutes: int = DEFAULT_UPDATE_INTERVAL,
+    ):
         super().__init__(
             hass,
             _LOGGER,
             name="Iqua Softener",
-            update_interval=UPDATE_INTERVAL,
+            update_interval=timedelta(minutes=update_interval_minutes),
         )
         self._iqua_softener = iqua_softener
 
@@ -180,8 +188,7 @@ class IquaSoftenerSensor(SensorEntity, CoordinatorEntity, ABC):
         self.async_write_ha_state()
 
     @abstractmethod
-    def update(self, data: IquaSoftenerData):
-        ...
+    def update(self, data: IquaSoftenerData): ...
 
 
 class IquaSoftenerStateSensor(IquaSoftenerSensor):
@@ -233,9 +240,7 @@ class IquaSoftenerSaltLevelSensor(IquaSoftenerSensor):
 class IquaSoftenerAvailableWaterSensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
         self._attr_native_value = data.total_water_available / (
-            1000
-            if data.volume_unit == IquaSoftenerVolumeUnit.LITERS
-            else 1
+            1000 if data.volume_unit == IquaSoftenerVolumeUnit.LITERS else 1
         )
         self._attr_native_unit_of_measurement = (
             UnitOfVolume.CUBIC_METERS
@@ -260,9 +265,7 @@ class IquaSoftenerWaterCurrentFlowSensor(IquaSoftenerSensor):
 class IquaSoftenerWaterUsageTodaySensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
         self._attr_native_value = data.today_use / (
-            1000
-            if data.volume_unit == IquaSoftenerVolumeUnit.LITERS
-            else 1
+            1000 if data.volume_unit == IquaSoftenerVolumeUnit.LITERS else 1
         )
         self._attr_native_unit_of_measurement = (
             UnitOfVolume.CUBIC_METERS
@@ -274,12 +277,34 @@ class IquaSoftenerWaterUsageTodaySensor(IquaSoftenerSensor):
 class IquaSoftenerWaterUsageDailyAverageSensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
         self._attr_native_value = data.average_daily_use / (
-            1000
-            if data.volume_unit == IquaSoftenerVolumeUnit.LITERS
-            else 1
+            1000 if data.volume_unit == IquaSoftenerVolumeUnit.LITERS else 1
         )
         self._attr_native_unit_of_measurement = (
             UnitOfVolume.CUBIC_METERS
             if data.volume_unit == IquaSoftenerVolumeUnit.LITERS
             else UnitOfVolume.GALLONS
         )
+
+
+class IquaSoftenerWaterShutoffValveStateSensor(IquaSoftenerSensor):
+    def update(self, data: IquaSoftenerData):
+        if hasattr(data, "water_shutoff_valve_state"):
+            # Convert numeric state to text
+            valve_state = data.water_shutoff_valve_state
+            if valve_state == 1:
+                self._attr_native_value = "Open"
+            elif valve_state == 0:
+                self._attr_native_value = "Closed"
+            else:
+                self._attr_native_value = f"Unknown ({valve_state})"
+        else:
+            self._attr_native_value = "Unknown"
+
+    @property
+    def icon(self) -> Optional[str]:
+        if self._attr_native_value == "Open":
+            return "mdi:valve-open"
+        elif self._attr_native_value == "Closed":
+            return "mdi:valve-closed"
+        else:
+            return "mdi:valve"

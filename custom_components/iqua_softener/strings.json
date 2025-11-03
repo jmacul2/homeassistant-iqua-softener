@@ -5,10 +5,50 @@
         "data": {
           "username": "Username",
           "password": "Password",
-          "device_sn": "Serial Number"
+          "device_sn": "Serial Number",
+          "update_interval": "Update Interval (minutes)"
         },
         "description": "Enter your iQua credentials and device serial number.",
         "title": "Setup"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "State"
+      },
+      "date_time": {
+        "name": "Date/Time"
+      },
+      "last_regeneration": {
+        "name": "Last Regeneration"
+      },
+      "out_of_salt_estimated_day": {
+        "name": "Out of Salt Estimated Day"
+      },
+      "salt_level": {
+        "name": "Salt Level"
+      },
+      "available_water": {
+        "name": "Available Water"
+      },
+      "water_current_flow": {
+        "name": "Water Current Flow"
+      },
+      "water_usage_today": {
+        "name": "Today Water Usage"
+      },
+      "water_usage_daily_average": {
+        "name": "Water Usage Daily Average"
+      },
+      "water_shutoff_valve_state": {
+        "name": "Water Shutoff Valve State"
+      }
+    },
+    "switch": {
+      "water_shutoff_valve": {
+        "name": "Water Shutoff Valve"
       }
     }
   }
