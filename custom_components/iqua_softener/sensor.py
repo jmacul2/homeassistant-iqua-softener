@@ -36,6 +36,8 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     VOLUME_FLOW_RATE_LITERS_PER_MINUTE,
     VOLUME_FLOW_RATE_GALLONS_PER_MINUTE,
+    IQUA_WEBSOCKET_BASE_URL,
+    CONF_WEBSOCKET_BASE_URL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -153,6 +155,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         iqua_softener: IquaSoftener,
         update_interval_minutes: int = DEFAULT_UPDATE_INTERVAL,
         enable_websocket: bool = True,
+        config_data: dict = None,
     ):
         super().__init__(
             hass,
@@ -162,10 +165,13 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         )
         self._iqua_softener = iqua_softener
         self._enable_websocket = enable_websocket
+        self._config_data = config_data or {}
         self._websocket_task = None
         self._websocket_session = None
         self._websocket_uri = None
         self._websocket_failed_permanently = False
+        self._last_websocket_refresh = None
+        self._websocket_refresh_interval = 3600  # Refresh URI every hour
         _LOGGER.info(
             "IquaSoftenerCoordinator initialized with %d minute update interval, WebSocket: %s",
             update_interval_minutes,
@@ -195,21 +201,13 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Authentication failed, cannot establish WebSocket: %s", auth_err)
                 return
 
-            # Get the WebSocket URI from the softener
-            _LOGGER.info("Attempting to get WebSocket URI from iqua_softener library...")
-            self._websocket_uri = await self.hass.async_add_executor_job(
-                self._iqua_softener.get_websocket_uri
-            )
+            # Get fresh WebSocket URI from the softener
+            _LOGGER.info("Getting fresh WebSocket URI from /live endpoint...")
+            await self._refresh_websocket_uri()
             
             if not self._websocket_uri:
-                _LOGGER.error("WebSocket URI is empty or None")
+                _LOGGER.error("WebSocket URI is empty or None after refresh")
                 return
-                
-            _LOGGER.info("Successfully got WebSocket URI (length: %d chars)", len(self._websocket_uri))
-            # Log the URI without the token for security
-            uri_parts = self._websocket_uri.split('?')
-            base_uri = uri_parts[0] if uri_parts else self._websocket_uri
-            _LOGGER.info("WebSocket base URI: %s", base_uri)
 
             # Start the WebSocket task
             _LOGGER.info("Creating WebSocket task...")
@@ -221,6 +219,95 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             _LOGGER.error("get_websocket_uri method not available in iqua_softener library: %s", err)
         except Exception as err:
             _LOGGER.error("Failed to start WebSocket connection: %s", err)
+
+    async def _refresh_websocket_uri(self):
+        """Refresh the WebSocket URI by calling the /live endpoint."""
+        try:
+            import time
+            current_time = time.time()
+            
+            # Check if we need to refresh based on time
+            if (self._last_websocket_refresh and 
+                current_time - self._last_websocket_refresh < self._websocket_refresh_interval):
+                time_since_refresh = current_time - self._last_websocket_refresh
+                _LOGGER.debug("WebSocket URI was refreshed %.0f seconds ago, skipping refresh", time_since_refresh)
+                return
+            
+            _LOGGER.info("Calling iqua_softener.get_websocket_uri() to refresh token...")
+            self._websocket_uri = await self.hass.async_add_executor_job(
+                self._iqua_softener.get_websocket_uri
+            )
+            
+            if self._websocket_uri:
+                self._last_websocket_refresh = current_time
+                _LOGGER.info("WebSocket URI refreshed successfully (length: %d chars)", len(self._websocket_uri))
+                
+                # Handle different URI formats
+                if self._websocket_uri.startswith('wss://'):
+                    # Already a full WebSocket URL
+                    uri_parts = self._websocket_uri.split('?')
+                    base_uri = uri_parts[0] if uri_parts else self._websocket_uri
+                    _LOGGER.info("WebSocket base URI: %s", base_uri)
+                elif self._websocket_uri.startswith('/ws/'):
+                    # Handle relative URI - construct full URL
+                    _LOGGER.info("Got relative WebSocket URI: %s", self._websocket_uri[:50] + "...")
+                    
+                    # Try to get WebSocket base URL from the library's configuration
+                    websocket_base = self._get_websocket_base_url()
+                    full_uri = f"{websocket_base}{self._websocket_uri}"
+                    
+                    _LOGGER.info("Constructed full WebSocket URI using base: %s", websocket_base)
+                    self._websocket_uri = full_uri
+                else:
+                    _LOGGER.warning("Unexpected WebSocket URI format: %s", self._websocket_uri[:50] + "...")
+            else:
+                _LOGGER.error("WebSocket URI refresh returned empty/None")
+                
+        except Exception as err:
+            _LOGGER.error("Failed to refresh WebSocket URI: %s", err)
+            self._websocket_uri = None
+
+    def _get_websocket_base_url(self):
+        """Get the WebSocket base URL, preferably from configuration or the iqua_softener library."""
+        try:
+            # First, check if user has configured a custom WebSocket base URL
+            if self._config_data and CONF_WEBSOCKET_BASE_URL in self._config_data:
+                custom_url = self._config_data[CONF_WEBSOCKET_BASE_URL]
+                if custom_url:
+                    _LOGGER.debug("Using configured WebSocket base URL: %s", custom_url)
+                    return custom_url
+            
+            # Try to get base URL from the library if it has this capability
+            if hasattr(self._iqua_softener, 'get_base_url'):
+                http_base = self._iqua_softener.get_base_url()
+                # Convert HTTP/HTTPS to WebSocket URL
+                if http_base.startswith('https://'):
+                    derived_url = http_base.replace('https://', 'wss://')
+                    _LOGGER.debug("Derived WebSocket base URL from library: %s", derived_url)
+                    return derived_url
+                elif http_base.startswith('http://'):
+                    derived_url = http_base.replace('http://', 'ws://')
+                    _LOGGER.debug("Derived WebSocket base URL from library: %s", derived_url)
+                    return derived_url
+            
+            # Try to get it from other library attributes
+            if hasattr(self._iqua_softener, 'base_url'):
+                http_base = self._iqua_softener.base_url
+                if http_base.startswith('https://'):
+                    derived_url = http_base.replace('https://', 'wss://')
+                    _LOGGER.debug("Derived WebSocket base URL from library base_url: %s", derived_url)
+                    return derived_url
+                elif http_base.startswith('http://'):
+                    derived_url = http_base.replace('http://', 'ws://')
+                    _LOGGER.debug("Derived WebSocket base URL from library base_url: %s", derived_url)
+                    return derived_url
+                    
+        except Exception as err:
+            _LOGGER.debug("Could not derive WebSocket base URL from library: %s", err)
+        
+        # Fallback to configured constant
+        _LOGGER.debug("Using default WebSocket base URL: %s", IQUA_WEBSOCKET_BASE_URL)
+        return IQUA_WEBSOCKET_BASE_URL
 
     async def async_stop_websocket(self):
         """Stop the WebSocket connection."""
@@ -258,8 +345,19 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 ) as ws:
                     _LOGGER.info("WebSocket connected successfully")
                     retry_count = 0  # Reset retry count on successful connection
+                    
+                    # Set up periodic URI refresh
+                    last_refresh_check = asyncio.get_event_loop().time()
+                    refresh_check_interval = 1800  # Check every 30 minutes
 
                     async for msg in ws:
+                        # Check if we need to refresh URI periodically
+                        current_time = asyncio.get_event_loop().time()
+                        if current_time - last_refresh_check > refresh_check_interval:
+                            _LOGGER.debug("Checking if WebSocket URI needs refresh...")
+                            await self._refresh_websocket_uri()
+                            last_refresh_check = current_time
+                        
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             try:
                                 data = json.loads(msg.data)
@@ -279,16 +377,16 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 break
             except aiohttp.ClientResponseError as err:
                 if err.status == 400:
-                    _LOGGER.error("WebSocket 400 error - likely authentication/token issue: %s", err)
+                    _LOGGER.error("WebSocket 400 error - likely token expiration: %s", err)
                     # For 400 errors, try to refresh the websocket URI
                     if retry_count < max_retries - 1:
-                        _LOGGER.info("Attempting to refresh WebSocket URI...")
+                        _LOGGER.info("Attempting to refresh WebSocket URI due to 400 error...")
                         try:
-                            # Re-authenticate and get new WebSocket URI
-                            self._websocket_uri = await self.hass.async_add_executor_job(
-                                self._iqua_softener.get_websocket_uri
-                            )
-                            _LOGGER.info("WebSocket URI refreshed successfully")
+                            await self._refresh_websocket_uri()
+                            if self._websocket_uri:
+                                _LOGGER.info("WebSocket URI refreshed successfully, will retry connection")
+                            else:
+                                _LOGGER.error("WebSocket URI refresh failed")
                         except Exception as refresh_err:
                             _LOGGER.error("Failed to refresh WebSocket URI: %s", refresh_err)
                 else:

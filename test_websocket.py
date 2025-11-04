@@ -10,6 +10,36 @@ import json
 import sys
 from iqua_softener import IquaSoftener
 
+# Default WebSocket base URL - can be overridden
+DEFAULT_WEBSOCKET_BASE = "wss://api.myiquaapp.com"
+
+def get_websocket_base_url(softener):
+    """Get the WebSocket base URL from the softener library or use default."""
+    try:
+        # Try to get base URL from the library if it has this capability
+        if hasattr(softener, 'get_base_url'):
+            http_base = softener.get_base_url()
+            # Convert HTTP/HTTPS to WebSocket URL
+            if http_base.startswith('https://'):
+                return http_base.replace('https://', 'wss://')
+            elif http_base.startswith('http://'):
+                return http_base.replace('http://', 'ws://')
+        
+        # Try to get it from other library attributes
+        if hasattr(softener, 'base_url'):
+            http_base = softener.base_url
+            if http_base.startswith('https://'):
+                return http_base.replace('https://', 'wss://')
+            elif http_base.startswith('http://'):
+                return http_base.replace('http://', 'ws://')
+                
+    except Exception as err:
+        print(f"  Could not derive WebSocket base URL from library: {err}")
+    
+    # Fallback to default
+    print(f"  Using default WebSocket base URL: {DEFAULT_WEBSOCKET_BASE}")
+    return DEFAULT_WEBSOCKET_BASE
+
 async def test_websocket_connection(username, password, device_sn):
     """Test WebSocket connection independently."""
     print(f"Testing WebSocket connection for device: {device_sn}")
@@ -39,10 +69,22 @@ async def test_websocket_connection(username, password, device_sn):
                 return False
             
             print(f"✓ WebSocket URI obtained (length: {len(ws_uri)})")
-            # Show base URI without token
-            uri_parts = ws_uri.split('?')
-            base_uri = uri_parts[0] if uri_parts else ws_uri
-            print(f"  Base URI: {base_uri}")
+            
+            # Handle relative URI (starts with /ws/) by constructing full URL
+            if ws_uri.startswith('/ws/'):
+                print(f"  Got relative URI: {ws_uri[:50]}...")
+                websocket_base = get_websocket_base_url(softener)
+                full_uri = f"{websocket_base}{ws_uri}"
+                print(f"  Constructing full URI with base {websocket_base}")
+                print(f"  Full URI: {full_uri.split('?')[0]}?p=...")
+                ws_uri = full_uri
+            elif ws_uri.startswith('wss://') or ws_uri.startswith('ws://'):
+                # Show base URI without token
+                uri_parts = ws_uri.split('?')
+                base_uri = uri_parts[0] if uri_parts else ws_uri
+                print(f"  Full URI: {base_uri}")
+            else:
+                print(f"  Unexpected URI format: {ws_uri[:50]}...")
             
         except AttributeError:
             print("✗ get_websocket_uri method not available in library")
@@ -117,14 +159,21 @@ async def test_websocket_connection(username, password, device_sn):
 
 def main():
     """Main function to run the test."""
-    if len(sys.argv) != 4:
-        print("Usage: python test_websocket.py <username> <password> <device_serial>")
+    if len(sys.argv) < 4 or len(sys.argv) > 5:
+        print("Usage: python test_websocket.py <username> <password> <device_serial> [websocket_base_url]")
         print("Example: python test_websocket.py myuser@email.com mypassword ABC123")
+        print("Example: python test_websocket.py myuser@email.com mypassword ABC123 wss://custom.api.com")
         sys.exit(1)
     
     username = sys.argv[1]
     password = sys.argv[2]
     device_sn = sys.argv[3]
+    
+    # Override default WebSocket base URL if provided
+    if len(sys.argv) == 5:
+        global DEFAULT_WEBSOCKET_BASE
+        DEFAULT_WEBSOCKET_BASE = sys.argv[4]
+        print(f"Using custom WebSocket base URL: {DEFAULT_WEBSOCKET_BASE}")
     
     print("iQua WebSocket Connection Test")
     print("=" * 40)

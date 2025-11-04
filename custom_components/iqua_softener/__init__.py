@@ -50,6 +50,7 @@ async def async_setup_entry(
         ),
         update_interval_minutes,
         enable_websocket,
+        hass_data,  # Pass config data for URL configuration
     )
 
     unsub_options_update_listener = entry.add_update_listener(options_update_listener)
