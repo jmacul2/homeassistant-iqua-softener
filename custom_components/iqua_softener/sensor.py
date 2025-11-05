@@ -200,8 +200,8 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             return
 
         # Check if another instance already has a WebSocket for this device
-        if hasattr(self.hass.data, 'iqua_websockets'):
-            existing_ws = self.hass.data.iqua_websockets.get(self._websocket_key)
+        if 'iqua_websockets' in self.hass.data:
+            existing_ws = self.hass.data['iqua_websockets'].get(self._websocket_key)
             if existing_ws and not existing_ws.done():
                 _LOGGER.info("WebSocket already active for this device, sharing connection")
                 self._websocket_task = existing_ws
@@ -225,9 +225,9 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             )
             
             # Store the WebSocket task globally to prevent duplicates
-            if not hasattr(self.hass.data, 'iqua_websockets'):
-                self.hass.data.iqua_websockets = {}
-            self.hass.data.iqua_websockets[self._websocket_key] = self._websocket_task
+            if 'iqua_websockets' not in self.hass.data:
+                self.hass.data['iqua_websockets'] = {}
+            self.hass.data['iqua_websockets'][self._websocket_key] = self._websocket_task
             
             _LOGGER.info("Home Assistant WebSocket task created successfully")
         except Exception as err:
@@ -248,8 +248,8 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             self._websocket_session = None
 
         # Remove from global WebSocket registry
-        if hasattr(self.hass.data, 'iqua_websockets'):
-            self.hass.data.iqua_websockets.pop(self._websocket_key, None)
+        if 'iqua_websockets' in self.hass.data:
+            self.hass.data['iqua_websockets'].pop(self._websocket_key, None)
 
         # Clear real-time data when WebSocket stops
         self._realtime_data.clear()
