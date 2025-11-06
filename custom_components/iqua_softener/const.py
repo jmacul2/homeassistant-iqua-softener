@@ -13,9 +13,14 @@ CONF_WEBSOCKET_BASE_URL: Final = "websocket_base_url"
 DEFAULT_UPDATE_INTERVAL: Final = 5  # minutes
 DEFAULT_ENABLE_WEBSOCKET: Final = True
 
+<<<<<<< Updated upstream
 # API Configuration
 IQUA_API_BASE_URL: Final = "https://api.myiquaapp.com"
 IQUA_WEBSOCKET_BASE_URL: Final = "wss://api.myiquaapp.com"
+=======
+# Switch optimistic state timeout (seconds)
+SWITCH_OPTIMISTIC_TIMEOUT: Final = 10
+>>>>>>> Stashed changes
 
 VOLUME_FLOW_RATE_LITERS_PER_MINUTE: Final = "L/m"
 VOLUME_FLOW_RATE_GALLONS_PER_MINUTE: Final = "gal/m"

@@ -1,5 +1,6 @@
 import logging
 from typing import Any
+import asyncio
 
 from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -8,7 +9,7 @@ from homeassistant.components.switch import SwitchEntity
 from iqua_softener import IquaSoftenerData, IquaSoftenerException
 
 from homeassistant import config_entries, core
-from .const import DOMAIN, CONF_DEVICE_SERIAL_NUMBER
+from .const import DOMAIN, CONF_DEVICE_SERIAL_NUMBER, SWITCH_OPTIMISTIC_TIMEOUT
 from .sensor import IquaSoftenerCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +50,8 @@ class IquaSoftenerWaterShutoffValveSwitch(SwitchEntity, CoordinatorEntity):
         self._attr_unique_id = f"{device_serial_number}_water_shutoff_valve".lower()
         self._attr_name = "Water Shutoff Valve"
         self._attr_icon = "mdi:valve"
+        self._optimistic_state = None
+        self._optimistic_until = None
 
         # Get initial state
         self.update_state(self.coordinator.data)
@@ -61,6 +64,18 @@ class IquaSoftenerWaterShutoffValveSwitch(SwitchEntity, CoordinatorEntity):
 
     def update_state(self, data: IquaSoftenerData) -> None:
         """Update the switch state based on coordinator data."""
+        # If we're in optimistic mode and haven't reached the timeout, keep optimistic state
+        if self._optimistic_state is not None and self._optimistic_until is not None:
+            import time
+
+            if time.time() < self._optimistic_until:
+                self._attr_is_on = self._optimistic_state
+                return
+            else:
+                # Optimistic period expired, clear it
+                self._optimistic_state = None
+                self._optimistic_until = None
+
         if data and hasattr(data, "water_shutoff_valve_state"):
             # Assuming 1 = open (on), 0 = closed (off)
             self._attr_is_on = bool(data.water_shutoff_valve_state)
@@ -76,25 +91,51 @@ class IquaSoftenerWaterShutoffValveSwitch(SwitchEntity, CoordinatorEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on the water shutoff valve (open the valve)."""
+        # Set optimistic state immediately
+        import time
+
+        self._optimistic_state = True
+        self._optimistic_until = time.time() + SWITCH_OPTIMISTIC_TIMEOUT
+        self._attr_is_on = True
+        self.async_write_ha_state()
+
         try:
             await self.hass.async_add_executor_job(
                 self.coordinator._iqua_softener.open_water_shutoff_valve
             )
+            # Wait a bit longer before refresh to allow valve to actually change
+            await asyncio.sleep(3)
             # Request an immediate update after the action
             await self.coordinator.async_request_refresh()
         except IquaSoftenerException as err:
+            # Clear optimistic state on error
+            self._optimistic_state = None
+            self._optimistic_until = None
             _LOGGER.error("Failed to open water shutoff valve: %s", err)
             raise
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off the water shutoff valve (close the valve)."""
+        # Set optimistic state immediately
+        import time
+
+        self._optimistic_state = False
+        self._optimistic_until = time.time() + SWITCH_OPTIMISTIC_TIMEOUT
+        self._attr_is_on = False
+        self.async_write_ha_state()
+
         try:
             await self.hass.async_add_executor_job(
                 self.coordinator._iqua_softener.close_water_shutoff_valve
             )
+            # Wait a bit longer before refresh to allow valve to actually change
+            await asyncio.sleep(3)
             # Request an immediate update after the action
             await self.coordinator.async_request_refresh()
         except IquaSoftenerException as err:
+            # Clear optimistic state on error
+            self._optimistic_state = None
+            self._optimistic_until = None
             _LOGGER.error("Failed to close water shutoff valve: %s", err)
             raise
 
