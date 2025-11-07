@@ -510,10 +510,13 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
     async def _handle_realtime_data(self, data):
         """Handle real-time data updates from WebSocket."""
         try:
-            _LOGGER.debug("Processing real-time data: %s", data)
+            _LOGGER.debug("=== WebSocket Data Received ===")
+            _LOGGER.debug("Raw WebSocket data: %s", data)
+            _LOGGER.debug("Data type: %s", type(data))
 
             # Handle current_water_flow_gpm specifically
             if isinstance(data, dict) and data.get("name") == "current_water_flow_gpm":
+                _LOGGER.debug("Processing water flow data...")
                 if (
                     "converted_property" in data
                     and "value" in data["converted_property"]
@@ -522,7 +525,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     original_value = data.get("value", "unknown")
 
                     _LOGGER.info(
-                        "WebSocket water flow update: raw=%s -> converted=%s gpm",
+                        "🌊 WebSocket water flow update: raw=%s -> converted=%s gpm",
                         original_value,
                         corrected_flow_value,
                     )
@@ -532,18 +535,28 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     self._realtime_data_timestamps["current_water_flow_gpm"] = (
                         time.time()
                     )
+                    
+                    _LOGGER.debug("Stored realtime data: %s", self._realtime_data)
 
                     # Update the library's external real-time data
                     await self.hass.async_add_executor_job(
                         self._iqua_softener.update_external_realtime_data,
                         {data["name"]: data},
                     )
+                    
+                    _LOGGER.debug("Updated library external realtime data")
+                else:
+                    _LOGGER.warning("Water flow data missing converted_property or value: %s", data)
+            else:
+                _LOGGER.debug("Non-water-flow data received: name=%s", data.get("name", "unknown"))
 
             # Trigger coordinator update to refresh all entities
+            _LOGGER.debug("Triggering coordinator refresh...")
             await self.async_request_refresh()
-            _LOGGER.debug("Real-time data processed successfully")
+            _LOGGER.debug("✓ Real-time data processed and coordinator refreshed")
+            _LOGGER.debug("=== End WebSocket Data Processing ===")
         except Exception as err:
-            _LOGGER.error("Failed to handle real-time data: %s", err)
+            _LOGGER.error("❌ Failed to handle real-time data: %s", err, exc_info=True)
 
     async def async_retry_websocket(self):
         """Manually retry WebSocket connection."""
@@ -710,25 +723,37 @@ class IquaSoftenerAvailableWaterSensor(IquaSoftenerSensor):
 
 class IquaSoftenerWaterCurrentFlowSensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
+        # Enhanced debug logging to diagnose WebSocket flow data issues
+        _LOGGER.debug("=== Water Flow Sensor Update Debug ===")
+        _LOGGER.debug("API current_water_flow value: %s", data.current_water_flow)
+        
         # Use the library's get_realtime_property method for real-time flow data
         realtime_flow = self.coordinator._iqua_softener.get_realtime_property(
             "current_water_flow_gpm"
         )
+        
+        _LOGGER.debug("Library realtime flow value: %s", realtime_flow)
+        _LOGGER.debug("Coordinator realtime_data: %s", getattr(self.coordinator, '_realtime_data', {}))
+        _LOGGER.debug("WebSocket task status: %s", 
+                     "running" if getattr(self.coordinator, '_websocket_task', None) and not self.coordinator._websocket_task.done() else "not running")
 
         if realtime_flow is not None:
             # Use real-time WebSocket data
             self._attr_native_value = realtime_flow
-            _LOGGER.debug("Using real-time water flow from library: %s", realtime_flow)
+            _LOGGER.debug("✓ Using real-time water flow from library: %s", realtime_flow)
         else:
             # Fall back to regular API data
             self._attr_native_value = data.current_water_flow
-            _LOGGER.debug("Using API water flow: %s", self._attr_native_value)
+            _LOGGER.debug("⚠ Using API water flow (no realtime): %s", self._attr_native_value)
 
         self._attr_native_unit_of_measurement = (
             VOLUME_FLOW_RATE_LITERS_PER_MINUTE
             if data.volume_unit == IquaSoftenerVolumeUnit.LITERS
             else VOLUME_FLOW_RATE_GALLONS_PER_MINUTE
         )
+        
+        _LOGGER.debug("Final flow value: %s %s", self._attr_native_value, self._attr_native_unit_of_measurement)
+        _LOGGER.debug("=== End Water Flow Sensor Update ===")
 
 
 class IquaSoftenerWaterUsageTodaySensor(IquaSoftenerSensor):
