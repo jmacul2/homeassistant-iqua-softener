@@ -360,7 +360,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     
                     # Timing intervals
                     refresh_check_interval = 1800    # Check every 30 minutes
-                    heartbeat_log_interval = 300     # Log heartbeat every 5 minutes
+                    heartbeat_log_interval = 60      # Log heartbeat every 1 minute
                     stale_connection_threshold = 600 # Consider stale after 10 minutes of no messages
                     
                     _LOGGER.debug("🔍 Starting WebSocket message loop with monitoring...")
