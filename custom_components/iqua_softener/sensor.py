@@ -191,6 +191,10 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         # Create a unique WebSocket identifier based on device serial and account
         self._websocket_key = f"iqua_{self._iqua_softener.device_serial_number}_{hash(self._iqua_softener._username)}"
 
+        # Add periodic health check
+        self._last_health_check = None
+        self._health_check_interval = 300  # Check every 5 minutes
+
         _LOGGER.info(
             "IquaSoftenerCoordinator initialized with %d minute update interval, WebSocket: %s (key: %s)",
             update_interval_minutes,
@@ -317,9 +321,10 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         _LOGGER.info("WebSocket connection stopped and real-time data cleared")
 
     async def _websocket_handler(self):
-        """Handle WebSocket connection managed by Home Assistant."""
+        """Handle WebSocket connection with enhanced monitoring and recovery."""
         retry_count = 0
         max_retries = 3
+        connection_start_time = time.time()
 
         while retry_count < max_retries:
             try:
@@ -327,151 +332,227 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     self._websocket_session = aiohttp.ClientSession()
 
                 _LOGGER.info(
-                    "Attempting WebSocket connection (attempt %d/%d)",
+                    "🔌 Attempting WebSocket connection (attempt %d/%d)",
                     retry_count + 1,
                     max_retries,
                 )
+
+                # Log connection timing info
+                if self._last_websocket_refresh:
+                    token_age = time.time() - self._last_websocket_refresh
+                    _LOGGER.debug("🕐 Token age: %.2f minutes", token_age / 60)
 
                 async with self._websocket_session.ws_connect(
                     self._websocket_uri,
                     timeout=aiohttp.ClientTimeout(total=30),
                     heartbeat=30,
                 ) as ws:
-                    _LOGGER.info("WebSocket connected successfully")
+                    connection_success_time = time.time()
+                    _LOGGER.info("✅ WebSocket connected successfully after %.2f seconds", 
+                                connection_success_time - connection_start_time)
                     retry_count = 0
 
-                    # Set up periodic URI refresh
+                    # Connection monitoring variables
+                    last_message_time = time.time()
                     last_refresh_check = time.time()
-                    refresh_check_interval = 1800  # Check every 30 minutes
+                    last_heartbeat_log = time.time()
+                    message_count = 0
+                    
+                    # Timing intervals
+                    refresh_check_interval = 1800    # Check every 30 minutes
+                    heartbeat_log_interval = 300     # Log heartbeat every 5 minutes
+                    stale_connection_threshold = 600 # Consider stale after 10 minutes of no messages
+                    
+                    _LOGGER.debug("🔍 Starting WebSocket message loop with monitoring...")
 
                     async for msg in ws:
-                        # Check if we need to refresh URI periodically
                         current_time = time.time()
+                        
+                        # Periodic heartbeat logging to verify connection is alive
+                        if current_time - last_heartbeat_log > heartbeat_log_interval:
+                            time_since_message = current_time - last_message_time
+                            _LOGGER.info("💓 WebSocket heartbeat: %d messages received, %.1f min since last message", 
+                                        message_count, time_since_message / 60)
+                            last_heartbeat_log = current_time
+                            
+                            # Check for stale connection
+                            if time_since_message > stale_connection_threshold:
+                                _LOGGER.warning("⚠️ WebSocket connection appears stale (%.1f min without messages) - may need refresh", 
+                                               time_since_message / 60)
+
+                        # Check if we need to refresh URI periodically
                         if current_time - last_refresh_check > refresh_check_interval:
-                            _LOGGER.debug("Checking if WebSocket URI needs refresh...")
-                            await self._refresh_websocket_uri()
-                            last_refresh_check = current_time
+                            _LOGGER.debug("🔄 Periodic WebSocket URI refresh check...")
+                            try:
+                                await self._refresh_websocket_uri()
+                                last_refresh_check = current_time
+                            except Exception as refresh_err:
+                                _LOGGER.warning("⚠️ Periodic URI refresh failed: %s", refresh_err)
 
                         if msg.type == aiohttp.WSMsgType.TEXT:
+                            last_message_time = current_time
+                            message_count += 1
                             try:
                                 data = json.loads(msg.data)
-                                _LOGGER.debug("Received WebSocket data: %s", data)
+                                _LOGGER.debug("📨 WebSocket message #%d: %s", message_count, 
+                                             data.get('name', 'unknown') if isinstance(data, dict) else 'raw_data')
                                 await self._handle_realtime_data(data)
                             except json.JSONDecodeError as err:
-                                _LOGGER.warning("Invalid JSON received: %s", err)
+                                _LOGGER.warning("❌ Invalid JSON received: %s", err)
                         elif msg.type == aiohttp.WSMsgType.ERROR:
-                            _LOGGER.error("WebSocket error: %s", ws.exception())
+                            _LOGGER.error("❌ WebSocket error: %s", ws.exception())
                             break
                         elif msg.type == aiohttp.WSMsgType.CLOSE:
-                            _LOGGER.info("WebSocket closed by server")
+                            close_code = getattr(ws, 'close_code', 'unknown')
+                            _LOGGER.warning("🔌 WebSocket closed by server (code: %s)", close_code)
                             break
+                        elif msg.type == aiohttp.WSMsgType.PONG:
+                            _LOGGER.debug("🏓 WebSocket PONG received")
+                        elif msg.type == aiohttp.WSMsgType.PING:
+                            _LOGGER.debug("🏓 WebSocket PING received")
+                        else:
+                            _LOGGER.debug("📋 WebSocket message type: %s", msg.type)
+
+                    # If we exit the message loop, log why
+                    final_time = time.time()
+                    connection_duration = final_time - connection_success_time
+                    _LOGGER.warning("🔌 WebSocket message loop ended after %.2f minutes (%d messages)", 
+                                   connection_duration / 60, message_count)
 
             except asyncio.CancelledError:
-                _LOGGER.info("WebSocket handler cancelled")
+                _LOGGER.info("🛑 WebSocket handler cancelled")
                 break
+            except aiohttp.ClientConnectorError as err:
+                _LOGGER.error("❌ WebSocket connection failed (attempt %d/%d): %s", 
+                             retry_count + 1, max_retries, err)
+            except aiohttp.WSServerHandshakeError as err:
+                _LOGGER.error("❌ WebSocket handshake failed (attempt %d/%d): %s", 
+                             retry_count + 1, max_retries, err)
             except aiohttp.ClientResponseError as err:
                 if err.status == 400:
-                    _LOGGER.error(
-                        "WebSocket 400 error - likely token expiration: %s", err
-                    )
+                    _LOGGER.error("❌ WebSocket 400 error - Token likely expired!")
+                    if self._last_websocket_refresh:
+                        token_age = time.time() - self._last_websocket_refresh
+                        _LOGGER.error("   🕐 Token age at failure: %.2f minutes", token_age / 60)
+                    
                     if retry_count < max_retries - 1:
-                        _LOGGER.info(
-                            "Attempting to recover from authentication error..."
-                        )
+                        _LOGGER.info("🔄 Attempting to recover from token expiration...")
                         try:
-                            # First try to refresh authentication by recreating the client
-                            _LOGGER.debug(
-                                "Recreating iQua client to reset authentication"
-                            )
-                            from iqua_softener import IquaSoftener
-
-                            self._iqua_softener = IquaSoftener(
-                                self._username,
-                                self._password,
-                                self._device_serial_number,
-                            )
-
-                            # Now try to get a fresh WebSocket URI
-                            await self._refresh_websocket_uri()
-                            if self._websocket_uri:
-                                _LOGGER.info(
-                                    "Authentication recovered and WebSocket URI refreshed, will retry connection"
-                                )
-                            else:
-                                _LOGGER.error(
-                                    "Authentication recovery failed - WebSocket URI refresh failed"
-                                )
+                            await self._recover_from_token_expiration()
                         except Exception as recovery_err:
-                            _LOGGER.error(
-                                "Failed to recover from authentication error: %s",
-                                recovery_err,
-                            )
+                            _LOGGER.error("❌ Token recovery failed: %s", recovery_err)
+                elif err.status == 401:
+                    _LOGGER.error("❌ WebSocket 401 error - Authentication failed")
+                    await self._recover_from_token_expiration()
+                elif err.status == 403:
+                    _LOGGER.error("❌ WebSocket 403 error - Access forbidden")
                 else:
-                    _LOGGER.error(
-                        "WebSocket HTTP error (attempt %d/%d): %s",
-                        retry_count + 1,
-                        max_retries,
-                        err,
-                    )
+                    _LOGGER.error("❌ WebSocket HTTP error %d (attempt %d/%d): %s", 
+                                 err.status, retry_count + 1, max_retries, err)
+            except asyncio.TimeoutError as err:
+                _LOGGER.error("❌ WebSocket timeout (attempt %d/%d): %s", 
+                             retry_count + 1, max_retries, err)
             except Exception as err:
-                _LOGGER.error(
-                    "WebSocket connection error (attempt %d/%d): %s",
-                    retry_count + 1,
-                    max_retries,
-                    err,
-                )
+                _LOGGER.error("❌ Unexpected WebSocket error (attempt %d/%d): %s", 
+                             retry_count + 1, max_retries, err, exc_info=True)
 
             retry_count += 1
             if retry_count < max_retries:
                 wait_time = min(60 * retry_count, 300)
-                _LOGGER.info("Waiting %d seconds before retry...", wait_time)
+                _LOGGER.info("⏳ Waiting %d seconds before WebSocket retry...", wait_time)
                 await asyncio.sleep(wait_time)
             else:
-                _LOGGER.error(
-                    "Max WebSocket retry attempts reached. WebSocket functionality disabled."
-                )
+                _LOGGER.error("❌ Max WebSocket retry attempts reached. WebSocket functionality disabled.")
                 self._websocket_failed_permanently = True
                 break
 
+    async def _recover_from_token_expiration(self):
+        """Attempt to recover from WebSocket token expiration."""
+        _LOGGER.info("🔄 Starting token expiration recovery...")
+        
+        try:
+            # Step 1: Recreate the client to reset authentication
+            _LOGGER.debug("1️⃣ Recreating iQua client...")
+            from iqua_softener import IquaSoftener
+            
+            self._iqua_softener = IquaSoftener(
+                self._username,
+                self._password,
+                self._device_serial_number,
+            )
+            
+            # Step 2: Get fresh WebSocket URI
+            _LOGGER.debug("2️⃣ Getting fresh WebSocket URI...")
+            new_uri = await self.hass.async_add_executor_job(
+                self._iqua_softener.get_websocket_uri
+            )
+            
+            if new_uri:
+                self._websocket_uri = new_uri
+                self._last_websocket_refresh = time.time()
+                _LOGGER.info("✅ Token recovery successful - new URI obtained")
+            else:
+                _LOGGER.error("❌ Token recovery failed - no URI obtained")
+                raise Exception("Failed to obtain new WebSocket URI")
+                
+        except Exception as err:
+            _LOGGER.error("❌ Token recovery failed: %s", err)
+            raise
+
     async def _refresh_websocket_uri(self):
-        """Refresh the WebSocket URI using the library."""
+        """Refresh the WebSocket URI using the library with enhanced logging."""
         try:
             current_time = time.time()
 
-            # Check if we need to refresh based on time
-            if (
-                self._last_websocket_refresh
-                and current_time - self._last_websocket_refresh
-                < self._websocket_refresh_interval
-            ):
+            # Enhanced logging for debugging
+            _LOGGER.debug("=== WebSocket URI Refresh Debug ===")
+            _LOGGER.debug("🕐 Current time: %s", datetime.fromtimestamp(current_time))
+            
+            if self._last_websocket_refresh:
                 time_since_refresh = current_time - self._last_websocket_refresh
-                _LOGGER.debug(
-                    "WebSocket URI was refreshed %.0f seconds ago, skipping refresh",
-                    time_since_refresh,
-                )
-                return
+                _LOGGER.debug("🕐 Time since last refresh: %.2f minutes", time_since_refresh / 60)
+                
+                # Check if we need to refresh based on time (but allow forced refresh)
+                if time_since_refresh < self._websocket_refresh_interval:
+                    _LOGGER.debug("⏭️ WebSocket URI refreshed %.0f seconds ago, skipping routine refresh", 
+                                 time_since_refresh)
+                    return
 
-            _LOGGER.info("Refreshing WebSocket URI using library...")
+            _LOGGER.info("🔄 Refreshing WebSocket URI using library...")
+            
+            # Store old URI for comparison
+            old_uri = self._websocket_uri
+            old_token_preview = self._get_token_preview(old_uri) if old_uri else None
+            
             new_uri = await self.hass.async_add_executor_job(
                 self._iqua_softener.get_websocket_uri
             )
 
-            if new_uri and new_uri != self._websocket_uri:
-                self._websocket_uri = new_uri
-                self._last_websocket_refresh = current_time
-                _LOGGER.info("WebSocket URI refreshed successfully")
+            if new_uri:
+                new_token_preview = self._get_token_preview(new_uri)
+                _LOGGER.debug("🔑 Old token: %s", old_token_preview or "None")
+                _LOGGER.debug("🔑 New token: %s", new_token_preview or "None")
+                
+                if new_uri != self._websocket_uri:
+                    self._websocket_uri = new_uri
+                    self._last_websocket_refresh = current_time
+                    _LOGGER.info("✅ WebSocket URI refreshed successfully (token changed)")
+                else:
+                    _LOGGER.warning("⚠️ WebSocket URI refresh returned same URI - token may not have changed")
+                    # Update timestamp anyway to prevent constant refresh attempts
+                    self._last_websocket_refresh = current_time
             else:
-                _LOGGER.error("WebSocket URI refresh returned empty/None or same URI")
+                _LOGGER.error("❌ WebSocket URI refresh returned empty/None")
+                
+            _LOGGER.debug("=== End WebSocket URI Refresh ===")
 
         except TypeError as err:
             # Handle the same authentication error we saw in data fetching
             if "'str' object is not callable" in str(err):
-                _LOGGER.error(
-                    "Authentication error during WebSocket URI refresh: %s", err
-                )
+                _LOGGER.error("🔐 Authentication error during WebSocket URI refresh: %s", err)
                 # Try to recreate the client
                 try:
-                    _LOGGER.debug("Recreating iQua client during WebSocket URI refresh")
+                    _LOGGER.debug("🔄 Recreating iQua client during WebSocket URI refresh")
                     from iqua_softener import IquaSoftener
 
                     self._iqua_softener = IquaSoftener(
@@ -486,26 +567,55 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     if new_uri:
                         self._websocket_uri = new_uri
                         self._last_websocket_refresh = current_time
-                        _LOGGER.info(
-                            "WebSocket URI refreshed after authentication recovery"
-                        )
+                        _LOGGER.info("✅ WebSocket URI refreshed after authentication recovery")
                     else:
-                        _LOGGER.error(
-                            "WebSocket URI refresh failed even after authentication recovery"
-                        )
+                        _LOGGER.error("❌ WebSocket URI refresh failed even after authentication recovery")
                 except Exception as recovery_err:
-                    _LOGGER.error(
-                        "Failed to recover WebSocket authentication: %s", recovery_err
-                    )
+                    _LOGGER.error("❌ Failed to recover WebSocket authentication: %s", recovery_err)
                     raise
             else:
-                _LOGGER.error(
-                    "Unexpected TypeError during WebSocket URI refresh: %s", err
-                )
+                _LOGGER.error("❌ Unexpected TypeError during WebSocket URI refresh: %s", err)
                 raise
         except Exception as err:
-            _LOGGER.error("Failed to refresh WebSocket URI: %s", err)
+            _LOGGER.error("❌ Failed to refresh WebSocket URI: %s", err, exc_info=True)
             raise
+
+    def _get_token_preview(self, uri):
+        """Get a safe preview of the WebSocket token for logging."""
+        if not uri or '?p=' not in uri:
+            return None
+        try:
+            token = uri.split('?p=')[1]
+            return f"{token[:20]}...({len(token)} chars)"
+        except Exception:
+            return "Invalid format"
+
+    async def check_websocket_health(self):
+        """Check WebSocket health and restart if needed."""
+        if not self._enable_websocket:
+            return "WebSocket disabled"
+            
+        if self._websocket_failed_permanently:
+            return "WebSocket failed permanently"
+            
+        if not self._websocket_task:
+            return "No WebSocket task - restarting..."
+            
+        if self._websocket_task.done():
+            _LOGGER.warning("⚠️ WebSocket task completed unexpectedly - restarting...")
+            await self.async_restart_websocket()
+            return "WebSocket task was done - restarted"
+            
+        # Check if we have recent real-time data
+        if self._realtime_data_timestamps:
+            latest_timestamp = max(self._realtime_data_timestamps.values())
+            time_since_data = time.time() - latest_timestamp
+            if time_since_data > 600:  # 10 minutes
+                _LOGGER.warning("⚠️ No real-time data for %.1f minutes - WebSocket may be stale", 
+                               time_since_data / 60)
+                return f"Stale data ({time_since_data/60:.1f}m ago)"
+        
+        return "Healthy"
 
     async def _handle_realtime_data(self, data):
         """Handle real-time data updates from WebSocket."""
@@ -567,6 +677,21 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> IquaSoftenerData:
         _LOGGER.debug("Fetching data from iQua API")
+        
+        # Periodic WebSocket health check
+        current_time = time.time()
+        if (not self._last_health_check or 
+            current_time - self._last_health_check > self._health_check_interval):
+            
+            health_status = await self.check_websocket_health()
+            _LOGGER.debug("🔍 WebSocket health check: %s", health_status)
+            self._last_health_check = current_time
+            
+            # If WebSocket is stale, try to restart it
+            if "stale" in health_status.lower() or "restarting" in health_status.lower():
+                _LOGGER.info("🔄 WebSocket appears unhealthy, attempting restart...")
+                await self.async_restart_websocket()
+        
         try:
             data = await self.hass.async_add_executor_job(
                 lambda: self._iqua_softener.get_data()
