@@ -5,13 +5,17 @@
         "data": {
           "username": "Username",
           "password": "Password",
-          "device_sn": "Serial Number",
+          "device_sn": "Device Serial Number (optional)",
+          "product_sn": "Product Serial Number (optional)",
           "update_interval": "Update Interval (minutes)",
           "enable_websocket": "Enable Real-time Updates"
         },
-        "description": "Enter your iQua credentials and device serial number.",
+        "description": "Enter your iQua credentials and either Device Serial Number OR Product Serial Number (not both).",
         "title": "Setup"
       }
+    },
+    "error": {
+      "missing_serial_number": "Either Device Serial Number or Product Serial Number must be provided"
     }
   },
   "options": {

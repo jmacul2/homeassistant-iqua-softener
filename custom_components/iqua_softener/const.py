@@ -5,6 +5,7 @@ DOMAIN: Final = "iqua_softener"
 CONF_USERNAME: Final = "username"
 CONF_PASSWORD: Final = "password"
 CONF_DEVICE_SERIAL_NUMBER: Final = "device_sn"
+CONF_PRODUCT_SERIAL_NUMBER: Final = "product_sn"
 CONF_UPDATE_INTERVAL: Final = "update_interval"
 CONF_ENABLE_WEBSOCKET: Final = "enable_websocket"
 

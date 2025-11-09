@@ -8,6 +8,7 @@ from .const import (
     CONF_USERNAME,
     CONF_PASSWORD,
     CONF_DEVICE_SERIAL_NUMBER,
+    CONF_PRODUCT_SERIAL_NUMBER,
     CONF_UPDATE_INTERVAL,
     CONF_ENABLE_WEBSOCKET,
     DEFAULT_UPDATE_INTERVAL,
@@ -40,12 +41,19 @@ async def async_setup_entry(
         update_interval_minutes,
         enable_websocket,
     )
+    # Extract serial numbers from config
+    device_sn = hass_data.get(CONF_DEVICE_SERIAL_NUMBER)
+    product_sn = hass_data.get(CONF_PRODUCT_SERIAL_NUMBER)
+    
+    _LOGGER.info("Creating IquaSoftener with device_sn=%s, product_sn=%s", device_sn, product_sn)
+    
     coordinator = IquaSoftenerCoordinator(
         hass,
         IquaSoftener(
             hass_data[CONF_USERNAME],
             hass_data[CONF_PASSWORD],
-            hass_data[CONF_DEVICE_SERIAL_NUMBER],
+            device_serial_number=device_sn,
+            product_serial_number=product_sn,
             enable_websocket=enable_websocket,  # Let the library handle WebSocket
         ),
         update_interval_minutes,

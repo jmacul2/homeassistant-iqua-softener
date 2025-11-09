@@ -100,21 +100,6 @@ class IquaSoftener:
 
         # External real-time data (for Home Assistant integration)
         self._external_realtime_data = external_realtime_data
-        self._websocket_listeners: list[Callable[[Dict[str, Any]], None]] = []
-
-    def register_realtime_listener(self, callback: Callable[[Dict[str, Any]], None]) -> None:
-        """Register a callback for real-time WebSocket updates."""
-        if not callable(callback):
-            raise ValueError("Callback must be callable")
-        with self._websocket_lock:
-            if callback not in self._websocket_listeners:
-                self._websocket_listeners.append(callback)
-
-    def unregister_realtime_listener(self, callback: Callable[[Dict[str, Any]], None]) -> None:
-        """Remove a previously registered real-time callback."""
-        with self._websocket_lock:
-            if callback in self._websocket_listeners:
-                self._websocket_listeners.remove(callback)
 
     @property
     def device_serial_number(self) -> str:
@@ -162,7 +147,7 @@ class IquaSoftener:
         service_active = realtime_val("service_active", "service_active", True)
 
         return IquaSoftenerData(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(tz=ZoneInfo("UTC")),
             model=f"{model_desc} ({model_id})",
             state=(
                 IquaSoftenerState.ONLINE
@@ -447,16 +432,9 @@ class IquaSoftener:
             property_name = data["name"]
             with self._websocket_lock:
                 self._realtime_data[property_name] = data
-                listeners = list(self._websocket_listeners)
             logger.debug(
                 f"Updated real-time property: {property_name} = {data.get('value')}"
             )
-
-        for listener in listeners:
-            try:
-                listener(data)
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.error(f"Real-time listener error for {property_name}: {exc}")
 
     def save_tokens(self, path: str):
         """Save authentication tokens to a file."""

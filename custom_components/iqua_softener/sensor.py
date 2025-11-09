@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
     CoordinatorEntity,
 )
+from homeassistant.util import dt as dt_util
 
 from .vendor.iqua_softener import (
     IquaSoftener,
@@ -34,6 +35,7 @@ from homeassistant.const import UnitOfVolume
 from .const import (
     DOMAIN,
     CONF_DEVICE_SERIAL_NUMBER,
+    CONF_PRODUCT_SERIAL_NUMBER,
     DEFAULT_UPDATE_INTERVAL,
     VOLUME_FLOW_RATE_LITERS_PER_MINUTE,
     VOLUME_FLOW_RATE_GALLONS_PER_MINUTE,
@@ -50,7 +52,12 @@ async def async_setup_entry(
     config = hass.data[DOMAIN][config_entry.entry_id]
     if config_entry.options:
         config.update(config_entry.options)
-    device_serial_number = config[CONF_DEVICE_SERIAL_NUMBER]
+    
+    # Get device serial number for entity naming (prefer device_sn, fallback to product_sn)
+    device_serial_number = config.get(CONF_DEVICE_SERIAL_NUMBER) or config.get(CONF_PRODUCT_SERIAL_NUMBER)
+    if not device_serial_number:
+        _LOGGER.error("No device or product serial number found in config")
+        return
 
     # Use the shared coordinator from __init__.py
     coordinator = config["coordinator"]
@@ -193,6 +200,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         self._username = self._config_data.get("username")
         self._password = self._config_data.get("password")
         self._device_serial_number = self._config_data.get("device_sn")
+        self._product_serial_number = self._config_data.get("product_sn")
 
         # Hybrid WebSocket: Library handles connection, HA handles real-time updates
         self._ha_websocket_task = None
@@ -246,9 +254,11 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("No WebSocket URI available for HA listener")
                 return
                 
+            # Use whichever serial number is available for task naming
+            task_serial = self._device_serial_number or self._product_serial_number or "unknown"
             self._ha_websocket_task = self.hass.async_create_background_task(
                 self._ha_websocket_listener(websocket_uri),
-                name=f"iqua_ha_websocket_{self._device_serial_number}",
+                name=f"iqua_ha_websocket_{task_serial}",
             )
             
         except Exception as err:
@@ -379,6 +389,14 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("API returned None data - sensors will show as unknown")
                 raise UpdateFailed("API returned no data")
             
+            # Log timezone information for debugging
+            if hasattr(data, 'device_date_time') and data.device_date_time:
+                device_tz = data.device_date_time.tzinfo
+                local_time = dt_util.as_local(data.device_date_time)
+                _LOGGER.debug("Device time: %s (%s) -> Local: %s (%s)", 
+                            data.device_date_time, device_tz, 
+                            local_time, local_time.tzinfo)
+            
             _LOGGER.info("✅ API refresh completed - sensors updating from API data")
             
             # Start WebSocket after first successful data fetch (post-bootstrap)
@@ -402,7 +420,8 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     self._iqua_softener = IquaSoftener(
                         self._username,
                         self._password,
-                        self._device_serial_number,
+                        device_serial_number=self._device_serial_number,
+                        product_serial_number=self._product_serial_number,
                     )
                     # Try the request again with fresh client
                     data = await self.hass.async_add_executor_job(
@@ -526,20 +545,27 @@ class IquaSoftenerStateSensor(IquaSoftenerSensor):
 class IquaSoftenerDeviceDateTimeSensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
         try:
-            self._attr_native_value = data.device_date_time.strftime("%Y-%m-%d %H:%M:%S")
+            # Convert UTC device time to Home Assistant's local timezone
+            device_time_local = dt_util.as_local(data.device_date_time)
+            self._attr_native_value = device_time_local
+            
+            # Debug logging for timezone conversion
+            _LOGGER.debug("Device time conversion: %s (UTC) -> %s (Local)", 
+                         data.device_date_time, device_time_local)
         except Exception as err:
             _LOGGER.error("Error updating date/time sensor: %s", err)
             if not hasattr(self, '_attr_native_value'):
-                self._attr_native_value = "Unknown"
+                self._attr_native_value = None
 
 
 class IquaSoftenerLastRegenerationSensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
         try:
-            self._attr_native_value = (
-                datetime.now(data.device_date_time.tzinfo)
-                - timedelta(days=data.days_since_last_regeneration)
-            ).replace(hour=0, minute=0, second=0)
+            # Calculate last regeneration date in Home Assistant's local timezone
+            now_local = dt_util.now()
+            last_regen = now_local - timedelta(days=data.days_since_last_regeneration)
+            # Set to midnight of that day
+            self._attr_native_value = last_regen.replace(hour=0, minute=0, second=0, microsecond=0)
         except Exception as err:
             _LOGGER.error("Error updating last regeneration sensor: %s", err)
             if not hasattr(self, '_attr_native_value'):
@@ -549,10 +575,11 @@ class IquaSoftenerLastRegenerationSensor(IquaSoftenerSensor):
 class IquaSoftenerOutOfSaltEstimatedDaySensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
         try:
-            self._attr_native_value = (
-                datetime.now(data.device_date_time.tzinfo)
-                + timedelta(days=data.out_of_salt_estimated_days)
-            ).replace(hour=0, minute=0, second=0)
+            # Calculate out of salt date in Home Assistant's local timezone
+            now_local = dt_util.now()
+            out_of_salt_date = now_local + timedelta(days=data.out_of_salt_estimated_days)
+            # Set to midnight of that day
+            self._attr_native_value = out_of_salt_date.replace(hour=0, minute=0, second=0, microsecond=0)
         except Exception as err:
             _LOGGER.error("Error updating out of salt estimation sensor: %s", err)
             if not hasattr(self, '_attr_native_value'):
@@ -599,9 +626,10 @@ class IquaSoftenerAvailableWaterSensor(IquaSoftenerSensor):
                 if data.volume_unit == IquaSoftenerVolumeUnit.LITERS
                 else UnitOfVolume.GALLONS
             )
-            self._attr_last_reset = datetime.now(data.device_date_time.tzinfo) - timedelta(
-                days=data.days_since_last_regeneration
-            )
+            # Set last reset to last regeneration in local timezone
+            now_local = dt_util.now()
+            last_regen = now_local - timedelta(days=data.days_since_last_regeneration)
+            self._attr_last_reset = last_regen.replace(hour=0, minute=0, second=0, microsecond=0)
         except Exception as err:
             _LOGGER.error("Error updating available water sensor: %s", err)
             if not hasattr(self, '_attr_native_value'):
