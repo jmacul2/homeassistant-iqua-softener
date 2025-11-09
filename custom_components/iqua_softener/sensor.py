@@ -2,10 +2,6 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 import logging
 from typing import Optional, Any
-import asyncio
-import aiohttp
-import json
-import time
 
 from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import (
@@ -225,168 +221,46 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         self._device_serial_number = self._config_data.get("device_sn")
         self._product_serial_number = self._config_data.get("product_sn")
 
-        # Hybrid WebSocket: Library handles connection, HA handles real-time updates
-        self._ha_websocket_task = None
-        self._ha_websocket_session = None
-        self._last_realtime_update = None
-        self._last_api_update = None  # Track API updates separately
-        
         # Flag to delay WebSocket start until after bootstrap
         self._websocket_start_delayed = False
 
         _LOGGER.info(
-            "IquaSoftenerCoordinator initialized with %d minute update interval, WebSocket: %s (hybrid mode)",
+            "IquaSoftenerCoordinator initialized with %d minute update interval, WebSocket: %s",
             update_interval_minutes,
             enable_websocket,
         )
-        
-        # Log initialization state
-        _LOGGER.info("Coordinator ready for immediate data refresh and sensor initialization")
 
     async def async_start_websocket(self):
-        """Start hybrid WebSocket: Library handles connection, HA handles real-time updates."""
+        """Start the WebSocket connection using library's implementation."""
         if not self._enable_websocket:
             _LOGGER.info("WebSocket disabled, skipping connection")
             return
 
         try:
-            # Step 1: Start library's WebSocket (handles 170-second refresh, etc.)
-            _LOGGER.info("Starting library WebSocket for data management...")
+            _LOGGER.info("Starting WebSocket using library's built-in implementation...")
             await self.hass.async_add_executor_job(self._iqua_softener.start_websocket)
-            
-            # Step 2: Start lightweight HA WebSocket listener for real-time updates
-            _LOGGER.info("Starting HA WebSocket listener for real-time sensor updates...")
-            await self._start_ha_websocket_listener()
-            _LOGGER.info("✅ WebSocket connection established successfully")
-            
+            _LOGGER.info("WebSocket started successfully using library")
         except Exception as err:
-            _LOGGER.error("Failed to start hybrid WebSocket: %s", err)
-
-    async def _start_ha_websocket_listener(self):
-        """Start lightweight HA WebSocket listener to trigger sensor updates."""
-        if self._ha_websocket_task:
-            return  # Already running
-            
-        try:
-            # Get WebSocket URI from library
-            websocket_uri = await self.hass.async_add_executor_job(
-                self._iqua_softener.get_websocket_uri
-            )
-            
-            if not websocket_uri:
-                _LOGGER.error("No WebSocket URI available for HA listener")
-                return
-                
-            # Use whichever serial number is available for task naming
-            task_serial = self._device_serial_number or self._product_serial_number or "unknown"
-            self._ha_websocket_task = self.hass.async_create_background_task(
-                self._ha_websocket_listener(websocket_uri),
-                name=f"iqua_ha_websocket_{task_serial}",
-            )
-            
-        except Exception as err:
-            _LOGGER.error("Failed to start HA WebSocket listener: %s", err)
-
-    async def _ha_websocket_listener(self, websocket_uri: str):
-        """Lightweight WebSocket listener that triggers sensor updates on data changes."""
-        retry_count = 0
-        max_retries = 3
-        
-        while retry_count < max_retries:
-            try:
-                if not self._ha_websocket_session:
-                    self._ha_websocket_session = aiohttp.ClientSession()
-
-                async with self._ha_websocket_session.ws_connect(
-                    websocket_uri,
-                    timeout=aiohttp.ClientTimeout(total=30, connect=15),
-                    heartbeat=30,
-                ) as ws:
-                    _LOGGER.info("🔄 WebSocket connection refreshed")
-                    retry_count = 0  # Reset on successful connection
-                    
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            try:
-                                data = json.loads(msg.data)
-                                await self._handle_realtime_message(data)
-                            except json.JSONDecodeError:
-                                continue  # Skip invalid JSON
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            _LOGGER.warning("HA WebSocket listener error: %s", ws.exception())
-                            break
-                        elif msg.type == aiohttp.WSMsgType.CLOSE:
-                            break
-                            
-            except asyncio.CancelledError:
-                break
-            except Exception as err:
-                retry_count += 1
-                _LOGGER.warning("WebSocket connection error (attempt %d/%d): %s", 
-                               retry_count, max_retries, err)
-                if retry_count < max_retries:
-                    wait_time = min(60 * retry_count, 300)
-                    await asyncio.sleep(wait_time)
-                else:
-                    _LOGGER.error("WebSocket max retries reached")
-                    break
-
-    async def _handle_realtime_message(self, data: dict):
-        """Handle real-time WebSocket messages by triggering sensor updates."""
-        # Only trigger updates for water flow changes (most important for real-time)
-        if isinstance(data, dict) and data.get("name") == "current_water_flow_gpm":
-            current_time = time.time()
-            
-            # Throttle updates to prevent excessive sensor refreshes (max every 5 seconds)
-            if (self._last_realtime_update is None or 
-                current_time - self._last_realtime_update > 5):
-                
-                flow_value = None
-                if ("converted_property" in data and 
-                    "value" in data["converted_property"]):
-                    flow_value = data["converted_property"]["value"]
-                else:
-                    flow_value = data.get("value", "unknown")
-                
-                self._last_realtime_update = current_time
-                _LOGGER.info("🌊 WebSocket flow update detected (value: %s) - sensors updating from real-time data", 
-                           flow_value)
-                
-                # Trigger coordinator refresh to update all sensors
-                await self.async_request_refresh()
+            _LOGGER.error("Failed to start library WebSocket: %s", err)
 
     async def async_restart_websocket(self):
-        """Restart the hybrid WebSocket connection."""
-        _LOGGER.info("Restarting hybrid WebSocket connection")
+        """Restart the WebSocket connection."""
+        _LOGGER.info("Restarting WebSocket connection")
         await self.async_stop_websocket()
         await self.async_start_websocket()
 
     async def async_stop_websocket(self):
-        """Stop the hybrid WebSocket connection."""
+        """Stop the WebSocket connection using library's implementation."""
         try:
-            # Stop HA WebSocket listener
-            if self._ha_websocket_task:
-                self._ha_websocket_task.cancel()
-                try:
-                    await self._ha_websocket_task
-                except asyncio.CancelledError:
-                    pass
-                self._ha_websocket_task = None
-
-            if self._ha_websocket_session:
-                await self._ha_websocket_session.close()
-                self._ha_websocket_session = None
-
-            # Stop library WebSocket
-            _LOGGER.info("Stopping library WebSocket...")
+            _LOGGER.info("Stopping WebSocket using library...")
             await self.hass.async_add_executor_job(self._iqua_softener.stop_websocket)
-            _LOGGER.info("Hybrid WebSocket stopped")
+            _LOGGER.info("WebSocket stopped using library")
         except Exception as err:
-            _LOGGER.error("Failed to stop hybrid WebSocket: %s", err)
+            _LOGGER.error("Failed to stop library WebSocket: %s", err)
 
     async def async_retry_websocket(self):
-        """Manually retry hybrid WebSocket connection."""
-        _LOGGER.info("Manual hybrid WebSocket retry requested")
+        """Manually retry WebSocket connection."""
+        _LOGGER.info("Manual WebSocket retry requested")
         await self.async_restart_websocket()
 
     async def async_force_update(self):
@@ -401,12 +275,18 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> IquaSoftenerData:
         _LOGGER.debug("Starting data fetch from iQua API...")
         
+        # Start WebSocket after first successful data fetch (post-bootstrap)
+        if (self._enable_websocket and 
+            not self._websocket_start_delayed):
+            _LOGGER.info("Starting WebSocket after successful initial API fetch...")
+            self._websocket_start_delayed = True
+            # Schedule WebSocket start as a background task to avoid blocking data fetch
+            self.hass.async_create_task(self.async_start_websocket())
+        
         try:
             data = await self.hass.async_add_executor_job(
                 lambda: self._iqua_softener.get_data()
             )
-            # Mark API update timestamp
-            self._last_api_update = time.time()
             
             if data is None:
                 _LOGGER.error("API returned None data - sensors will show as unknown")
@@ -420,17 +300,9 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                             data.device_date_time, device_tz, 
                             local_time, local_time.tzinfo)
             
-            _LOGGER.info("✅ API refresh completed - sensors updating from API data")
-            
-            # Start WebSocket after first successful data fetch (post-bootstrap)
-            if (self._enable_websocket and 
-                not self._websocket_start_delayed):
-                _LOGGER.info("Starting hybrid WebSocket after successful initial API fetch...")
-                self._websocket_start_delayed = True
-                # Schedule WebSocket start as a background task to avoid blocking data fetch
-                self.hass.async_create_task(self.async_start_websocket())
-            
+            _LOGGER.info("✅ API refresh completed successfully")
             return data
+            
         except TypeError as err:
             # Handle library authentication issues
             if "'str' object is not callable" in str(err):
@@ -450,14 +322,12 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     data = await self.hass.async_add_executor_job(
                         lambda: self._iqua_softener.get_data()
                     )
-                    # Mark API update timestamp
-                    self._last_api_update = time.time()
                     
                     if data is None:
                         _LOGGER.error("API recovery returned None data")
                         raise UpdateFailed("API recovery returned no data")
                     
-                    _LOGGER.info("✅ API recovery successful - sensors updating from API data")
+                    _LOGGER.info("✅ API recovery successful")
 
                     # Also restart WebSocket with fresh client if enabled
                     if self._enable_websocket:
@@ -490,35 +360,12 @@ class IquaSoftenerSensor(SensorEntity, CoordinatorEntity, ABC):
         self._attr_unique_id = (
             f"{device_serial_number}_{entity_description.key}".lower()
         )
-        
-        # Track update sources for debugging
-        self._last_update_source = None
-        self._last_update_time = None
 
         if entity_description is not None:
             self.entity_description = entity_description
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        # Determine update source for logging
-        current_time = time.time()
-        update_source = "API"
-        
-        # Check if this update was triggered by WebSocket (within 10 seconds)
-        if (hasattr(self.coordinator, '_last_realtime_update') and 
-            self.coordinator._last_realtime_update and 
-            current_time - self.coordinator._last_realtime_update < 10):
-            update_source = "WebSocket"
-        # Check if this was triggered by API update (within 5 seconds)
-        elif (hasattr(self.coordinator, '_last_api_update') and 
-              self.coordinator._last_api_update and 
-              current_time - self.coordinator._last_api_update < 5):
-            update_source = "API"
-            
-        self._last_update_source = update_source
-        self._last_update_time = current_time
-        
-        # Update the sensor with new data
         try:
             if self.coordinator.data is None:
                 _LOGGER.warning("%s: No data available from coordinator", self.entity_description.name)
@@ -526,14 +373,6 @@ class IquaSoftenerSensor(SensorEntity, CoordinatorEntity, ABC):
                 
             self.update(self.coordinator.data)
             self.async_write_ha_state()
-            
-            # Log updates for debugging startup and real-time behavior
-            if (update_source == "WebSocket" or 
-                self._last_update_source != update_source or
-                not hasattr(self, '_attr_native_value')):
-                _LOGGER.info("%s updated from %s: %s", 
-                           self.entity_description.name, update_source,
-                           getattr(self, '_attr_native_value', 'Unknown'))
         except Exception as err:
             _LOGGER.error("Error updating %s sensor: %s", self.entity_description.name, err)
 
@@ -558,7 +397,7 @@ class IquaSoftenerStateSensor(IquaSoftenerSensor):
             self._attr_native_value = str(data.state.value)
             
             if old_value != self._attr_native_value:
-                _LOGGER.info("State changed: %s → %s", old_value, self._attr_native_value)
+                _LOGGER.debug("State changed: %s → %s", old_value, self._attr_native_value)
         except Exception as err:
             _LOGGER.error("Error updating state sensor: %s", err)
             if not hasattr(self, '_attr_native_value'):
@@ -618,7 +457,7 @@ class IquaSoftenerSaltLevelSensor(IquaSoftenerSensor):
             self._attr_native_value = data.salt_level_percent
             
             if old_value != self._attr_native_value:
-                _LOGGER.info("Salt level changed: %s%% → %s%%", old_value, self._attr_native_value)
+                _LOGGER.debug("Salt level changed: %s%% → %s%%", old_value, self._attr_native_value)
         except Exception as err:
             _LOGGER.error("Error updating salt level sensor: %s", err)
             if not hasattr(self, '_attr_native_value'):
@@ -675,12 +514,12 @@ class IquaSoftenerWaterCurrentFlowSensor(IquaSoftenerSensor):
                 # Use real-time WebSocket data
                 self._attr_native_value = realtime_flow
                 if old_value != self._attr_native_value:
-                    _LOGGER.info("Water flow updated from WebSocket: %s", realtime_flow)
+                    _LOGGER.debug("Water flow updated from WebSocket: %s", realtime_flow)
             else:
                 # Fall back to regular API data
                 self._attr_native_value = data.current_water_flow
                 if old_value != self._attr_native_value:
-                    _LOGGER.info("Water flow updated from API: %s", self._attr_native_value)
+                    _LOGGER.debug("Water flow updated from API: %s", self._attr_native_value)
 
             self._attr_native_unit_of_measurement = (
                 VOLUME_FLOW_RATE_LITERS_PER_MINUTE
@@ -707,7 +546,7 @@ class IquaSoftenerWaterUsageTodaySensor(IquaSoftenerSensor):
             )
             
             if old_value != self._attr_native_value:
-                _LOGGER.info("Today's water usage changed: %s → %s %s", 
+                _LOGGER.debug("Today's water usage changed: %s → %s %s", 
                             old_value, self._attr_native_value, self._attr_native_unit_of_measurement)
         except Exception as err:
             _LOGGER.error("Error updating today's water usage sensor: %s", err)
