@@ -1,7 +1,8 @@
 import logging
 
 from homeassistant import config_entries, core
-from .vendor.iqua_softener import IquaSoftener
+from homeassistant.exceptions import ConfigEntryNotReady
+from .vendor.iqua_softener import IquaSoftener, IquaSoftenerException
 
 from .const import (
     DOMAIN,
@@ -47,6 +48,7 @@ async def async_setup_entry(
     
     _LOGGER.info("Creating IquaSoftener with device_sn=%s, product_sn=%s", device_sn, product_sn)
     
+    # Create coordinator (authentication already validated in config flow)
     coordinator = IquaSoftenerCoordinator(
         hass,
         IquaSoftener(
@@ -60,6 +62,20 @@ async def async_setup_entry(
         enable_websocket,
         hass_data,  # Pass config data for URL configuration
     )
+
+    # Perform initial data fetch for immediate availability
+    try:
+        _LOGGER.info("Performing initial data fetch...")
+        await coordinator.async_config_entry_first_refresh()
+        
+        if coordinator.data is None:
+            _LOGGER.warning("Initial data fetch returned no data, but continuing setup")
+        else:
+            _LOGGER.info("Initial data fetch successful")
+            
+    except Exception as err:
+        _LOGGER.warning("Initial data fetch failed, but continuing setup: %s", err)
+        # Don't fail the entire setup if initial fetch fails - the coordinator will retry
 
     unsub_options_update_listener = entry.add_update_listener(options_update_listener)
     hass_data["unsub_options_update_listener"] = unsub_options_update_listener

@@ -77,14 +77,10 @@ async def async_setup_entry(
     # Use the shared coordinator from __init__.py
     coordinator = config["coordinator"]
     
-    # Ensure immediate data fetch on startup
-    _LOGGER.info("Performing initial data refresh for sensors...")
-    await coordinator.async_config_entry_first_refresh()
-    
+    # Authentication is already validated in __init__.py, so coordinator.data should be available
     if coordinator.data is None:
-        _LOGGER.error("Initial data refresh failed - sensors may show as unknown")
-    else:
-        _LOGGER.info("Initial data refresh completed successfully - sensors will have immediate values")
+        _LOGGER.error("No data available from coordinator - authentication may have failed")
+        return
 
     # Define all sensors except water shutoff valve state (which is conditional)
     base_sensors = [

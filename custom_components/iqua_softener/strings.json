@@ -15,7 +15,15 @@
       }
     },
     "error": {
-      "missing_serial_number": "Either Device Serial Number or Product Serial Number must be provided"
+      "missing_serial_number": "Either Device Serial Number or Product Serial Number must be provided",
+      "invalid_auth": "Invalid username or password. Please check your iQua app credentials.",
+      "device_not_found": "Device not found. Please verify your serial number matches the device in your iQua app.",
+      "cannot_connect": "Cannot connect to iQua servers. Please check your internet connection and try again.",
+      "no_data": "Unable to retrieve device data. Please verify your credentials and device serial number.",
+      "unknown": "An unexpected error occurred. Please try again or check the logs for more details."
+    },
+    "progress": {
+      "validating_credentials": "Validating credentials and testing device connection..."
     }
   },
   "options": {
