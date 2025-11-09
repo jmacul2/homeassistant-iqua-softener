@@ -54,7 +54,15 @@ async def async_setup_entry(
 
     # Use the shared coordinator from __init__.py
     coordinator = config["coordinator"]
+    
+    # Ensure immediate data fetch on startup
+    _LOGGER.info("Performing initial data refresh for sensors...")
     await coordinator.async_config_entry_first_refresh()
+    
+    if coordinator.data is None:
+        _LOGGER.error("Initial data refresh failed - sensors may show as unknown")
+    else:
+        _LOGGER.info("Initial data refresh completed successfully - sensors will have immediate values")
 
     sensors = [
         clz(coordinator, device_serial_number, entity_description)
@@ -144,7 +152,22 @@ async def async_setup_entry(
             ),
         )
     ]
+    
+    # Add sensors to Home Assistant
     async_add_entities(sensors)
+    
+    # Force immediate update of all sensors with current data
+    if coordinator.data is not None:
+        _LOGGER.info("Initializing sensor values immediately with current data...")
+        for sensor in sensors:
+            try:
+                sensor.update(coordinator.data)
+                sensor.async_write_ha_state()
+            except Exception as err:
+                _LOGGER.error("Error initializing sensor %s: %s", sensor.entity_description.name, err)
+        _LOGGER.info("All sensors initialized with immediate values")
+    else:
+        _LOGGER.warning("No data available for immediate sensor initialization")
 
 
 class IquaSoftenerCoordinator(DataUpdateCoordinator):
@@ -185,6 +208,9 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             update_interval_minutes,
             enable_websocket,
         )
+        
+        # Log initialization state
+        _LOGGER.info("Coordinator ready for immediate data refresh and sensor initialization")
 
     async def async_start_websocket(self):
         """Start hybrid WebSocket: Library handles connection, HA handles real-time updates."""
@@ -340,6 +366,8 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Manual data refresh failed: %s", err)
 
     async def _async_update_data(self) -> IquaSoftenerData:
+        _LOGGER.debug("Starting data fetch from iQua API...")
+        
         try:
             data = await self.hass.async_add_executor_job(
                 lambda: self._iqua_softener.get_data()
@@ -351,7 +379,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("API returned None data - sensors will show as unknown")
                 raise UpdateFailed("API returned no data")
             
-            _LOGGER.info("✅ API refresh completed - sensors updating from 5-minute API data")
+            _LOGGER.info("✅ API refresh completed - sensors updating from API data")
             
             # Start WebSocket after first successful data fetch (post-bootstrap)
             if (self._enable_websocket and 
@@ -457,9 +485,10 @@ class IquaSoftenerSensor(SensorEntity, CoordinatorEntity, ABC):
             self.update(self.coordinator.data)
             self.async_write_ha_state()
             
-            # Only log if value actually changed or if it's important
+            # Log updates for debugging startup and real-time behavior
             if (update_source == "WebSocket" or 
-                hasattr(self, '_attr_native_value') and self._attr_native_value is not None):
+                self._last_update_source != update_source or
+                not hasattr(self, '_attr_native_value')):
                 _LOGGER.info("%s updated from %s: %s", 
                            self.entity_description.name, update_source,
                            getattr(self, '_attr_native_value', 'Unknown'))
