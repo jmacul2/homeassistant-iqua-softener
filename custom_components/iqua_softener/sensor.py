@@ -44,6 +44,21 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+async def _check_water_shutoff_valve_available(coordinator) -> bool:
+    """Check if the device has a water shutoff valve installed."""
+    try:
+        # Use the library method to check if device has water shutoff valve
+        has_valve = await coordinator.hass.async_add_executor_job(
+            coordinator._iqua_softener.has_water_shutoff_valve
+        )
+        _LOGGER.debug("Water shutoff valve availability check: %s", has_valve)
+        return has_valve
+        
+    except Exception as err:
+        _LOGGER.error("Error checking water shutoff valve availability: %s", err)
+        return False
+
+
 async def async_setup_entry(
     hass: core.HomeAssistant,
     config_entry: config_entries.ConfigEntry,
@@ -71,7 +86,8 @@ async def async_setup_entry(
     else:
         _LOGGER.info("Initial data refresh completed successfully - sensors will have immediate values")
 
-    sensors = [
+    # Define all sensors except water shutoff valve state (which is conditional)
+    base_sensors = [
         clz(coordinator, device_serial_number, entity_description)
         for clz, entity_description in (
             (
@@ -149,16 +165,27 @@ async def async_setup_entry(
                     icon="mdi:water-circle",
                 ),
             ),
-            (
-                IquaSoftenerWaterShutoffValveStateSensor,
-                SensorEntityDescription(
-                    key="WATER_SHUTOFF_VALVE_STATE",
-                    name="Water shutoff valve state",
-                    icon="mdi:valve",
-                ),
-            ),
         )
     ]
+    
+    # Check if device has water shutoff valve and add the sensor conditionally
+    has_valve = await _check_water_shutoff_valve_available(coordinator)
+    if has_valve:
+        _LOGGER.info("Device has water shutoff valve - adding valve state sensor")
+        valve_sensor = IquaSoftenerWaterShutoffValveStateSensor(
+            coordinator, 
+            device_serial_number, 
+            SensorEntityDescription(
+                key="WATER_SHUTOFF_VALVE_STATE",
+                name="Water shutoff valve state",
+                icon="mdi:valve",
+            )
+        )
+        base_sensors.append(valve_sensor)
+    else:
+        _LOGGER.info("Device does not have water shutoff valve - skipping valve state sensor")
+    
+    sensors = base_sensors
     
     # Add sensors to Home Assistant
     async_add_entities(sensors)

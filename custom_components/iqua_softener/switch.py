@@ -9,7 +9,7 @@ from homeassistant.components.switch import SwitchEntity
 from .vendor.iqua_softener import IquaSoftenerData, IquaSoftenerException
 
 from homeassistant import config_entries, core
-from .const import DOMAIN, CONF_DEVICE_SERIAL_NUMBER, SWITCH_OPTIMISTIC_TIMEOUT
+from .const import DOMAIN, CONF_DEVICE_SERIAL_NUMBER, CONF_PRODUCT_SERIAL_NUMBER, SWITCH_OPTIMISTIC_TIMEOUT
 from .sensor import IquaSoftenerCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,15 +25,45 @@ async def async_setup_entry(
     if config_entry.options:
         config.update(config_entry.options)
 
-    device_serial_number = config[CONF_DEVICE_SERIAL_NUMBER]
+    # Get device serial number (prefer device_sn, fallback to product_sn)
+    device_serial_number = config.get(CONF_DEVICE_SERIAL_NUMBER) or config.get(CONF_PRODUCT_SERIAL_NUMBER)
+    if not device_serial_number:
+        _LOGGER.error("No device or product serial number found in config for switch setup")
+        return
 
     # Use the shared coordinator from __init__.py
     coordinator = config["coordinator"]
 
-    # Create the water shutoff valve switch
+    # Check if the device has a water shutoff valve before creating the switch
+    if coordinator.data is None:
+        _LOGGER.warning("No data available to check for water shutoff valve capability")
+        return
+
+    # Check if device has water shutoff valve installed
+    if not await _check_water_shutoff_valve_available(coordinator):
+        _LOGGER.info("Device does not have a water shutoff valve installed - skipping switch creation")
+        return
+
+    # Create the water shutoff valve switch only if device supports it
     switches = [IquaSoftenerWaterShutoffValveSwitch(coordinator, device_serial_number)]
+    _LOGGER.info("Water shutoff valve switch created for device %s", device_serial_number)
 
     async_add_entities(switches)
+
+
+async def _check_water_shutoff_valve_available(coordinator: IquaSoftenerCoordinator) -> bool:
+    """Check if the device has a water shutoff valve installed."""
+    try:
+        # Use the library method to check if device has water shutoff valve
+        has_valve = await coordinator.hass.async_add_executor_job(
+            coordinator._iqua_softener.has_water_shutoff_valve
+        )
+        _LOGGER.debug("Water shutoff valve availability check: %s", has_valve)
+        return has_valve
+        
+    except Exception as err:
+        _LOGGER.error("Error checking water shutoff valve availability: %s", err)
+        return False
 
 
 class IquaSoftenerWaterShutoffValveSwitch(SwitchEntity, CoordinatorEntity):

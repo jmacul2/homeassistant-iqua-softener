@@ -298,6 +298,42 @@ class IquaSoftener:
         """Get the device ID for the configured serial number."""
         return self._get_device_id()
 
+    def get_device_details(self) -> dict:
+        """Get detailed device information for the configured device."""
+        device_id = self._get_device_id()
+        return self._get_device_detail(device_id)
+
+    def has_water_shutoff_valve(self) -> bool:
+        """Check if the device has a water shutoff valve installed."""
+        try:
+            device_id = self._get_device_id()
+            device = self._get_device_detail(device_id)
+            
+            # Check for water_shutoff_valve in multiple locations
+            valve_data = None
+            
+            # Check enriched_data first
+            enriched = device.get("enriched_data", {}).get("water_treatment", {})
+            valve_data = enriched.get("water_shutoff_valve", {})
+            
+            # If not in enriched_data, check properties
+            if not valve_data:
+                props = device.get("properties", {})
+                valve_data = props.get("water_shutoff_valve", {})
+            
+            # If still not found, check device root level  
+            if not valve_data:
+                valve_data = device.get("water_shutoff_valve", {})
+            
+            # Check if valve is installed
+            if isinstance(valve_data, dict):
+                return valve_data.get("is_installed", False)
+            
+            return False
+        except Exception as e:
+            logger.error(f"Error checking water shutoff valve availability: {e}")
+            return False
+
     def start_websocket(self):
         """Start WebSocket connection for real-time updates."""
         if not self._enable_websocket:
@@ -485,6 +521,11 @@ class IquaSoftener:
             valve_data = device.get("water_shutoff_valve", {})
 
         if isinstance(valve_data, dict):
+            # Check if valve is installed first
+            is_installed = valve_data.get("is_installed", False)
+            if not is_installed:
+                return 0  # Default to closed if not installed
+                
             status = valve_data.get("status", "closed")
             # Convert status string to int: "open" = 1, "closed" = 0
             return 1 if status == "open" else 0

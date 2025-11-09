@@ -5,7 +5,29 @@ All notable changes to the iQua Softener Home Assistant integration will be docu
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.1] - 2024-11-09
+## [2.0.2] - 2025-11-09
+
+### Added
+- **Conditional Water Shutoff Valve Entities**: Switch and valve state sensor now only appear if the device actually has a water shutoff valve installed
+  - Added `has_water_shutoff_valve()` method to library for proper device capability detection
+  - Added `get_device_details()` public method for external access to device information
+  - Enhanced device detection logic to check `is_installed` field in water shutoff valve data
+
+### Fixed
+- **Missing Switch Issue**: Fixed water shutoff valve switch not appearing due to product serial number handling
+  - Resolved product serial number support in switch platform setup
+  - Fixed device serial number extraction to properly handle both device_sn and product_sn configurations
+- **Improved Water Shutoff Valve Detection**: Enhanced API parsing to properly detect valve availability
+  - Updated valve state parsing to respect `is_installed` field from device API response
+  - Added comprehensive valve availability checking across multiple API data locations (enriched_data, properties, root level)
+  - Switch and valve state sensor creation now conditional based on actual device capabilities
+
+### Enhanced
+- **Better Error Handling**: Improved logging and error handling for water shutoff valve operations
+- **Device Capability Detection**: More robust detection of device features before creating entities
+- **API Response Parsing**: Enhanced parsing of device details to handle various API response formats
+
+## [2.0.1] - 2025-11-09
 
 ### Added
 - **Product Serial Number Support**: Added alternative configuration option to use Product Serial Number instead of Device Serial Number
@@ -23,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolved timezone conversion issues that could cause incorrect date displays
 - Fixed configuration validation to properly handle missing serial numbers
 
-## [2.0.0] - 2024-11-01
+## [2.0.0] - 2025-11-01
 
 ### Added
 - **🔄 Real-time Updates**: Complete WebSocket implementation for instant water flow monitoring
