@@ -1,7 +1,7 @@
 import logging
 
 from homeassistant import config_entries, core
-from iqua_softener import IquaSoftener
+from .vendor.iqua_softener import IquaSoftener
 
 from .const import (
     DOMAIN,

@@ -1,0 +1,1 @@
+# Vendored libraries for iQua Softener integration

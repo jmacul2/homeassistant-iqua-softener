@@ -6,7 +6,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.components.switch import SwitchEntity
 
-from iqua_softener import IquaSoftenerData, IquaSoftenerException
+from .vendor.iqua_softener import IquaSoftenerData, IquaSoftenerException
 
 from homeassistant import config_entries, core
 from .const import DOMAIN, CONF_DEVICE_SERIAL_NUMBER, SWITCH_OPTIMISTIC_TIMEOUT

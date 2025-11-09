@@ -98,6 +98,8 @@ action:
 
 ### Method 1: HACS (Recommended)
 
+**Note: This integration includes a vendored copy of the required library, so no additional manual installation is needed.**
+
 1. **Install HACS** if you haven't already:
    - Follow the [HACS installation guide](https://hacs.xyz/docs/setup/download)
 
@@ -131,11 +133,23 @@ config/
       sensor.py
       switch.py
       strings.json
+      vendor/          # Vendored iqua-softener library
+        iqua_softener/
       translations/
         en.json
 ```
 
 After installation (either method), restart Home Assistant.
+
+### About the Vendored Library
+
+This integration currently includes a vendored copy of the `iqua-softener` library with enhanced WebSocket and authentication features. This approach:
+
+- **Eliminates manual installation** - No need to manually install the library
+- **Ensures compatibility** - The exact version with required features is included
+- **Simplifies deployment** - Users only need to install the integration itself
+
+The vendored library will be removed once the upstream changes are merged and published to PyPI.
 
 ## Prerequisites
 
